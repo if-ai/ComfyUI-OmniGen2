@@ -21,6 +21,19 @@ def pil2tensor(image):
     return torch.from_numpy(np.array(image).astype(np.float32) / 255.0).unsqueeze(0)
 
 
+def tensor2pil(tensors):
+    if tensors is None:
+        return None
+    
+    images = []
+    for tensor in tensors:
+        # Assuming tensor is in CHW format, convert to HWC for PIL
+        # PIL expects a tensor on CPU, so we move it if it's on CUDA
+        image = to_pil_image(tensor.cpu())
+        images.append(image)
+    return images
+    
+
 def load_pipeline(model_path, accelerator, weight_dtype, scheduler, offload_type):    
     pipeline = OmniGen2Pipeline.from_pretrained(
         model_path,
@@ -132,7 +145,8 @@ class LoadOmniGen2Image:
             if (p.strip() != "" or p == image1_path) and not os.path.isfile(p):
                 raise RuntimeError(f"[ERROR] File not found: {p}")
         
-        return (preprocess(image1_path, image2_path, image3_path),)
+        tensor_images = [pil2tensor(img) for img in preprocess(image1_path, image2_path, image3_path)]
+        return (torch.cat(tensor_images, 0),)
 
 
 class LoadOmniGen2Model:
@@ -208,12 +222,12 @@ class OmniGen2:
 
         # Initialize accelerator
         accelerator = Accelerator(mixed_precision=dtype if dtype != 'fp32' else 'no')
+        
+        input_images_pil = tensor2pil(input_images.permute(0, 3, 1, 2))
                           
-        results = run(pipeline, input_images, seed, width, height, max_input_image_side_length, max_pixels, num_inference_step, text_guidance_scale, image_guidance_scale, 
+        results = run(pipeline, input_images_pil, seed, width, height, max_input_image_side_length, max_pixels, num_inference_step, text_guidance_scale, image_guidance_scale, 
                       cfg_range_start, cfg_range_end, num_images_per_prompt, accelerator, instruction, negative_prompt)
         
-        # NOTE: I cant figure out how to send outputs here without losing colors so for now I'm saving the images in .\temp\ and loading them afterwards -.-
-        #       someone plz fix this        
         images = []
         for i, image in enumerate(results.images):
             p = os.path.join(temp_dir, f"tmp_omnigen2_img_{i}.png")
